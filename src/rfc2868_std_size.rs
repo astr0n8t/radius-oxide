@@ -1,10 +1,12 @@
-use radius::core::avp::{AVPError, AVPType, AVP};
+use radius::core::avp::{AVPType, AVP};
 use radius::core::packet::Packet;
 use radius::core::tag::Tag;
 
 
 // Re-implementing these functions from here: https://github.com/moznion/radius-rs/blob/main/radius/src/core/rfc2868.rs
 // For why see this issue: https://github.com/moznion/radius-rs/issues/35
+// but essentially this ensures that Tunnel-Medium-Type and Tunnel-Type are
+// 6 byte fields per the rfc
 
 fn from_tagged_u16(typ: AVPType, tag: Option<&Tag>, value: u16) -> AVP {
     let unused = Tag::new_unused();
