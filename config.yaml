@@ -1,16 +1,22 @@
 ---
+listen_address: 0.0.0.0
+listen_port: 1812
 # Radius shared secret
 secret: SomeSecret
 # Whitelist of authentication servers to allow
 servers:
-  - 127.0.0.1
+  - ip: 127.0.0.1
+    default_vlan_enabled: true
+    vlan_id: 4000
 
 # List of users
 users:
   - username: admin
     # $ echo -n 'password' | sha512sum
     hash: b109f3bbbc244eb82441917ed06d618b9008dd09b3befd1b5e07394c706a8bb980b1d7785e5976ec049b46df5f1326af5a2ea6d103fd07c95385ffab0cacbc86
+    vlan_enabled: true
     vlan_id: 1
   - mac_address: 'aa:bb:cc:dd:ee:ff'
+    vlan_enabled: true
     vlan_id: 1000
     

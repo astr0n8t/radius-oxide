@@ -46,13 +46,18 @@ impl RequestHandler<(), io::Error> for OxideRequestHandler {
         let user_name = maybe_user_name_attr.unwrap().unwrap();
         let user_password = String::from_utf8(maybe_user_password_attr.unwrap().unwrap()).unwrap();
 
-        let (authenticated, vlan) = self.settings.authenticate(&user_name, &user_password);
-        let code = if authenticated {
-            Code::AccessAccept
+        let (authenticated, mut vlan) = self.settings.authenticate(&user_name, &user_password);
+
+        let code;
+        if authenticated {
+            code = Code::AccessAccept
+        } else if let Some(default_vlan) = self.settings.get_server_default_vlan(req.get_remote_addr()) {
+            vlan = Some(default_vlan);
+            code = Code::AccessAccept;
         } else {
-            Code::AccessReject
+            code = Code::AccessReject
         };
-        info!("response => {:?} to {}", code, req.get_remote_addr());
+        info!("response => {:?} to {} for client {}", code, req.get_remote_addr(), user_name);
 
         // VLAN attributes
         let mut response = req_packet.make_response_packet(code);
@@ -63,7 +68,8 @@ impl RequestHandler<(), io::Error> for OxideRequestHandler {
         rfc2868::delete_tunnel_private_group_id(&mut response);
 
         // Insert server values
-        if authenticated {
+        if code == Code::AccessAccept && vlan.is_some() {
+            let vlan = vlan.unwrap();
             let tunnel_tag = Tag::new(1);
             // VLAN
             rfc2868_std_size::add_tunnel_type(&mut response, Some(&tunnel_tag), 13);
@@ -96,12 +102,3 @@ impl SecretProvider for OxideSecretProvider {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        assert_eq!(4, 4);
-    }
-}

@@ -11,15 +11,18 @@ async fn main() {
     env_logger::init();
 
     let settings = radius_oxide::settings::OxideSettings::new().unwrap_or_else(|e|{
-        info!("{:?}", e);
+        error!("Config error: {:?}", e);
         process::exit(1);
     });
     
+    let listen_address = settings.get_listen_address();
+    let listen_port = settings.get_listen_port();
     let secret_handler = radius_oxide::OxideSecretProvider::new(settings.get_secret());
     let request_handler = radius_oxide::OxideRequestHandler::new(settings);
 
     // start UDP listening
-    let mut server = Server::listen("0.0.0.0", 1812, request_handler, secret_handler)
+    let mut server = Server::listen(&listen_address, listen_port, 
+                                    request_handler, secret_handler)
         .await
         .unwrap();
     server.set_buffer_size(1500); // default value: 1500

@@ -6,16 +6,22 @@ use std::net::{IpAddr, SocketAddr};
 
 #[derive(Debug)]
 pub struct OxideSettings {
+    listen_address: String,
+    listen_port: u16,
     users: HashMap<String,AuthenticationEntry>,
-    servers: Vec<IpAddr>,
+    servers: HashMap<IpAddr,AuthenticationServerEntry>,
     secret: String,
 }
 
 #[derive(Debug, Deserialize)]
 struct DeserializedSettings {
+    #[serde(default)]
+    listen_address: String,
+    #[serde(default)]
+    listen_port: u16,
     secret: String,
     #[serde(default)]
-    servers: Vec<String>,
+    servers: Vec<DeserializedServers>,
     #[serde(default)]
     users: Vec<DeserializedUsers>,
 }
@@ -29,6 +35,17 @@ struct DeserializedUsers {
     #[serde(default)]
     mac_address: String,
     #[serde(default)]
+    vlan_enabled: bool,
+    #[serde(default)]
+    vlan_id: u16
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+struct DeserializedServers {
+    ip: String,
+    #[serde(default)]
+    default_vlan_enabled: bool,
+    #[serde(default)]
     vlan_id: u16
 }
 
@@ -40,24 +57,57 @@ impl OxideSettings {
             .add_source(Environment::with_prefix("RADIUS_OXIDE"))
             .build()?;
 
-        let mut deserialized_settings: DeserializedSettings = s.try_deserialize().unwrap();
+        let mut deserialized_settings: DeserializedSettings = match s.try_deserialize() {
+            Ok(settings) => settings,
+            Err(e) => return Err(e),
+        };
 
-        let users: HashMap<String, AuthenticationEntry> = HashMap::new();
+        if deserialized_settings.listen_address.len() == 0 {
+            deserialized_settings.listen_address = String::from("0.0.0.0");
+        } else {
+            deserialized_settings.listen_address = match (&deserialized_settings.listen_address).parse() {
+                Ok(a) => a,
+                Err(e) => {
+                    warn!("Unable to parse provided listen IP address {:?} 
+                          will fall back to default",  e);
+                    String::from("0.0.0.0")
+                },
+            };
+        }
+
+        if deserialized_settings.listen_port == 0 {
+            deserialized_settings.listen_port = 1812;
+        } 
 
         let mut settings = Self {
-            users,
+            listen_address: deserialized_settings.listen_address,
+            listen_port: deserialized_settings.listen_port,
+            users: HashMap::new(),
             secret: deserialized_settings.secret,
-            servers: vec![],
+            servers: HashMap::new(),
         };
 
         while deserialized_settings.servers.len() > 0 {
-            let server_ip = match (&deserialized_settings.servers.pop().unwrap()).parse() {
+            let mut server_entry = deserialized_settings.servers.pop().unwrap();
+
+            let server_ip = match (&server_entry.ip).parse() {
                 Ok(ip) => ip,
                 Err(e) => return Err(ConfigError::Message(
                         format!("Unable to parse IP address {:?}", e)
                 )),
             };
-            settings.servers.push(server_ip);
+
+            if server_entry.vlan_id == 0 || server_entry.vlan_id > 4094 {
+                server_entry.default_vlan_enabled = false;
+                warn!("Invalid default VLAN ID for server entry {:?}, 
+                      continuing but default vlan will be disabled", server_entry);
+            }
+
+            let server_entry = AuthenticationServerEntry{
+                default_vlan_enabled: server_entry.default_vlan_enabled,
+                vlan: server_entry.vlan_id,
+            };
+            settings.servers.insert(server_ip, server_entry);
         }
 
         while deserialized_settings.users.len() > 0 {
@@ -78,8 +128,14 @@ impl OxideSettings {
     pub fn get_secret(&self) -> &str {
         &self.secret
     }
+    pub fn get_listen_address(&self) -> String {
+        self.listen_address.clone()
+    }
+    pub fn get_listen_port(&self) -> u16 {
+        self.listen_port
+    }
     // Returns if the user is authenticated and their respective vlan id
-    pub fn authenticate(&self, user: &str, pass: &str) -> (bool, u16) {
+    pub fn authenticate(&self, user: &str, pass: &str) -> (bool, Option<u16>) {
         let user = String::from(user);
         let pass = String::from(pass);
         if self.users.contains_key(&user) {
@@ -88,16 +144,37 @@ impl OxideSettings {
                 return (true, user.get_vlan());
             }
         } 
-        return (false, 0);
+        return (false, None);
     }
     pub fn valid_server(&self, server: SocketAddr) -> bool {
         let ip = server.ip();
-        if self.servers.contains(&ip) {
+        if self.servers.contains_key(&ip) {
             return true;
         }
         false
     }
+    pub fn get_server_default_vlan(&self, server: SocketAddr) -> Option<u16> {
+        let ip = server.ip();
+        let entry = match self.servers.get(&ip) {
+            Some(entry) => entry,
+            None => {
+                warn!("Unable to find server entry which should exist for server {:?}", server);
+                return None
+            },
+        };
 
+        if entry.default_vlan_enabled {
+            return Some(entry.vlan);
+        }
+        None
+    }
+
+}
+
+#[derive(Debug)]
+struct AuthenticationServerEntry {
+    default_vlan_enabled: bool,
+    vlan: u16,
 }
 
 #[derive(Debug)]
@@ -110,6 +187,7 @@ enum AuthKinds {
 struct AuthenticationEntry {
     kind: AuthKinds,
     password: String,
+    vlan_enabled: bool,
     vlan: u16,
 }
 
@@ -118,6 +196,7 @@ impl AuthenticationEntry {
         let mut entry: AuthenticationEntry = Self {
             kind: AuthKinds::Mac,
             password: String::from(""),
+            vlan_enabled: false,
             vlan: 0,
         };
         let key: String;
@@ -136,23 +215,31 @@ impl AuthenticationEntry {
             key = config.mac_address;
         }
 
-        if config.vlan_id == 0 {
-            entry.vlan = 1;
-            info!("VLAN not defined for entry: {:?} setting to VLAN 1", entry);
-        } else {
-            if config.vlan_id > 4096 {
-                return Err(ConfigError::Message(
-                    format!("Invalid VLAN id {:?} for entry {:?}", 
-                    config.vlan_id, entry)
-                ));
+        entry.vlan_enabled = config.vlan_enabled;
+
+        if entry.vlan_enabled {
+            if config.vlan_id == 0 {
+                entry.vlan_enabled = false;
+                info!("VLAN not defined for entry: {:?} disabling vlan", entry);
+            } else {
+                if config.vlan_id > 4094 {
+                    return Err(ConfigError::Message(
+                        format!("Invalid VLAN id {:?} for entry {:?}", 
+                        config.vlan_id, entry)
+                    ));
+                }
+                entry.vlan = config.vlan_id;
             }
-            entry.vlan = config.vlan_id;
         }
 
         Ok((key,entry))
     }
-    fn get_vlan(&self) -> u16 {
-        self.vlan
+    fn get_vlan(&self) -> Option<u16> {
+        if self.vlan_enabled {
+            Some(self.vlan)
+        } else {
+            None
+        }
     }
     fn authenticate(&self, password: String) -> bool {
         match self.kind {
