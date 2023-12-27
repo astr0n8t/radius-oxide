@@ -27,7 +27,7 @@ RUN if [ "$TARGETPLATFORM" = "linux/arm64" ]; then rustup target add aarch64-unk
 
 RUN if [ "$TARGETPLATFORM" = "linux/arm" ]; then rustup target add arm-unknown-linux-gnueabi; fi
 
-RUN if [ "$TARGETPLATFORM" = "linux/armv7" ]; then rustup target add armv7-unknown-linux-gnueabi; fi
+RUN if [ "$TARGETPLATFORM" = "linux/arm/v7" ]; then rustup target add armv7-unknown-linux-gnueabi; fi
 
 # create a new empty project
 RUN cargo init
@@ -46,7 +46,7 @@ RUN if [ "$TARGETPLATFORM" = "linux/arm64" ]; then \
         cp /app/target/aarch64-unknown-linux-gnu/release/radius-oxide /app/radius-oxide; \
  fi
 
-RUN if [ "$TARGETPLATFORM" = "linux/armv7" ]; then \
+RUN if [ "$TARGETPLATFORM" = "linux/arm/v7" ]; then \
         cargo build --release --target armv7-unknown-linux-gnueabi; \
         cp /app/target/armv7-unknown-linux-gnueabi/release/radius-oxide /app/radius-oxide; \
  fi
