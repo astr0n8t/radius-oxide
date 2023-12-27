@@ -3,6 +3,7 @@ ARG BUILDPLATFORM
 FROM --platform=${BUILDPLATFORM} rust:latest as rust-source
 FROM --platform=${BUILDPLATFORM} ghcr.io/cross-rs/x86_64-unknown-linux-gnu:edge as build_amd64
 FROM --platform=${BUILDPLATFORM} ghcr.io/cross-rs/aarch64-unknown-linux-gnu:edge as build_arm64
+FROM --platform=${BUILDPLATFORM} ghcr.io/cross-rs/armv7-unknown-linux-gnueabi:edge as build_armv7
 FROM --platform=${BUILDPLATFORM} ghcr.io/cross-rs/arm-unknown-linux-gnueabi:edge as build_arm
 
 ARG TARGETARCH
@@ -26,6 +27,8 @@ RUN if [ "$TARGETPLATFORM" = "linux/arm64" ]; then rustup target add aarch64-unk
 
 RUN if [ "$TARGETPLATFORM" = "linux/arm" ]; then rustup target add arm-unknown-linux-gnueabi; fi
 
+RUN if [ "$TARGETPLATFORM" = "linux/armv7" ]; then rustup target add armv7-unknown-linux-gnueabi; fi
+
 # create a new empty project
 RUN cargo init
 
@@ -41,6 +44,11 @@ RUN if [ "$TARGETPLATFORM" = "linux/amd64" ]; then \
 RUN if [ "$TARGETPLATFORM" = "linux/arm64" ]; then \
         cargo build --release --target aarch64-unknown-linux-gnu; \
         cp /app/target/aarch64-unknown-linux-gnu/release/radius-oxide /app/radius-oxide; \
+ fi
+
+RUN if [ "$TARGETPLATFORM" = "linux/armv7" ]; then \
+        cargo build --release --target armv7-unknown-linux-gnueabi; \
+        cp /app/target/armv7-unknown-linux-gnueabi/release/radius-oxide /app/radius-oxide; \
  fi
 
 RUN if [ "$TARGETPLATFORM" = "linux/arm" ]; then \
