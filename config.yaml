@@ -6,7 +6,8 @@ secret: SomeSecret
 # Whitelist of authentication servers to allow
 servers:
   - ip: 127.0.0.1
-    default_vlan_enabled: true
+    default_accept_unknown: true
+    default_vlan_enabled: false
     vlan_id: 4000
 
 # List of users

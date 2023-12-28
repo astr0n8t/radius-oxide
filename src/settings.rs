@@ -44,6 +44,8 @@ struct DeserializedUsers {
 struct DeserializedServers {
     ip: String,
     #[serde(default)]
+    default_accept_unknown: bool,
+    #[serde(default)]
     default_vlan_enabled: bool,
     #[serde(default)]
     vlan_id: u16
@@ -97,13 +99,20 @@ impl OxideSettings {
                 )),
             };
 
-            if server_entry.vlan_id == 0 || server_entry.vlan_id > 4094 {
+            if server_entry.default_accept_unknown {
+                if server_entry.vlan_id == 0 || server_entry.vlan_id > 4094 {
+                    server_entry.default_vlan_enabled = false;
+                    warn!("Invalid default VLAN ID for server entry {:?}, 
+                          continuing but default vlan will be disabled", server_entry);
+                }
+
+            } else {
                 server_entry.default_vlan_enabled = false;
-                warn!("Invalid default VLAN ID for server entry {:?}, 
-                      continuing but default vlan will be disabled", server_entry);
             }
 
+
             let server_entry = AuthenticationServerEntry{
+                default_accept_unknown: server_entry.default_accept_unknown,
                 default_vlan_enabled: server_entry.default_vlan_enabled,
                 vlan: server_entry.vlan_id,
             };
@@ -153,6 +162,20 @@ impl OxideSettings {
         }
         false
     }
+    pub fn get_server_default_accept(&self, server: SocketAddr) -> bool {
+        let ip = server.ip();
+        let entry = match self.servers.get(&ip) {
+            Some(entry) => entry,
+            None => {
+                warn!("Unable to find server entry which should exist for server {:?}", server);
+                return false;
+            },
+        };
+        if entry.default_accept_unknown {
+            return true;
+        }
+        false
+    }
     pub fn get_server_default_vlan(&self, server: SocketAddr) -> Option<u16> {
         let ip = server.ip();
         let entry = match self.servers.get(&ip) {
@@ -173,6 +196,7 @@ impl OxideSettings {
 
 #[derive(Debug)]
 struct AuthenticationServerEntry {
+    default_accept_unknown: bool,
     default_vlan_enabled: bool,
     vlan: u16,
 }

@@ -51,8 +51,10 @@ impl RequestHandler<(), io::Error> for OxideRequestHandler {
         let code;
         if authenticated {
             code = Code::AccessAccept
-        } else if let Some(default_vlan) = self.settings.get_server_default_vlan(req.get_remote_addr()) {
-            vlan = Some(default_vlan);
+        } else if self.settings.get_server_default_accept(req.get_remote_addr()) {
+            if let Some(default_vlan) = self.settings.get_server_default_vlan(req.get_remote_addr()) {
+                vlan = Some(default_vlan);
+            }
             code = Code::AccessAccept;
         } else {
             code = Code::AccessReject
