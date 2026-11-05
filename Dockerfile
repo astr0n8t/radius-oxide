@@ -10,10 +10,11 @@ ARG TARGETARCH
 ARG TARGETVARIANT
 FROM --platform=${BUILDPLATFORM} build_${TARGETARCH}${TARGETVARIANT} as builder
 
-COPY --from=rust-source /usr/local/rustup /usr/local
-COPY --from=rust-source /usr/local/cargo /usr/local
-
-RUN rustup default stable
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH
+COPY --from=rust-source /usr/local/rustup /usr/local/rustup
+COPY --from=rust-source /usr/local/cargo /usr/local/cargo
 
 LABEL app="radius-oxide"
 LABEL REPO="https://github.com/astr0n8t/radius-oxide"
