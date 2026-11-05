@@ -1,68 +1,58 @@
-# Build Stage
-ARG BUILDPLATFORM
-FROM --platform=${BUILDPLATFORM} rust:latest as rust-source
-FROM --platform=${BUILDPLATFORM} ghcr.io/cross-rs/x86_64-unknown-linux-gnu:edge as build_amd64
-FROM --platform=${BUILDPLATFORM} ghcr.io/cross-rs/aarch64-unknown-linux-gnu:edge as build_arm64
-FROM --platform=${BUILDPLATFORM} ghcr.io/cross-rs/armv7-unknown-linux-gnueabi:edge as build_armv7
-FROM --platform=${BUILDPLATFORM} ghcr.io/cross-rs/arm-unknown-linux-gnueabi:edge as build_arm
+# syntax=docker/dockerfile:1
 
-ARG TARGETARCH
-ARG TARGETVARIANT
-FROM --platform=${BUILDPLATFORM} build_${TARGETARCH}${TARGETVARIANT} as builder
+# Builds fully static musl binaries for every target platform natively on the
+# build host (no QEMU, no C cross toolchains: rustup's bundled rust-lld does the
+# linking), caches compiled dependencies in their own layer via cargo-chef, and
+# ships the result on distroless/static.
 
-ENV RUSTUP_HOME=/usr/local/rustup \
-    CARGO_HOME=/usr/local/cargo \
-    PATH=/usr/local/cargo/bin:$PATH
-COPY --from=rust-source /usr/local/rustup /usr/local/rustup
-COPY --from=rust-source /usr/local/cargo /usr/local/cargo
-
-LABEL app="radius-oxide"
-LABEL REPO="https://github.com/astr0n8t/radius-oxide"
-
+FROM --platform=$BUILDPLATFORM lukemathwalker/cargo-chef:0.1.78-rust-slim AS chef
 WORKDIR /app
 
+# Produce a dependency-only recipe; it only changes when Cargo.toml/Cargo.lock do.
+FROM chef AS planner
+COPY Cargo.toml Cargo.lock* ./
+COPY src ./src
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS builder
 ARG TARGETPLATFORM
-RUN if [ "$TARGETPLATFORM" = "linux/amd64" ]; then rustup target add x86_64-unknown-linux-gnu; fi
 
-RUN if [ "$TARGETPLATFORM" = "linux/arm64" ]; then rustup target add aarch64-unknown-linux-gnu; fi
+# Map the docker platform to a static musl rust target.
+RUN case "$TARGETPLATFORM" in \
+      linux/amd64)  target=x86_64-unknown-linux-musl ;; \
+      linux/arm64)  target=aarch64-unknown-linux-musl ;; \
+      linux/arm/v7) target=armv7-unknown-linux-musleabihf ;; \
+      linux/arm/v6) target=arm-unknown-linux-musleabihf ;; \
+      *) echo "unsupported platform: $TARGETPLATFORM" >&2; exit 1 ;; \
+    esac && \
+    echo "$target" > /rust-target && \
+    rustup target add "$target"
 
-RUN if [ "$TARGETPLATFORM" = "linux/arm" ]; then rustup target add arm-unknown-linux-gnueabi; fi
+ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld \
+    CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld \
+    CARGO_TARGET_ARMV7_UNKNOWN_LINUX_MUSLEABIHF_LINKER=rust-lld \
+    CARGO_TARGET_ARM_UNKNOWN_LINUX_MUSLEABIHF_LINKER=rust-lld
 
-RUN if [ "$TARGETPLATFORM" = "linux/arm/v7" ]; then rustup target add armv7-unknown-linux-gnueabi; fi
+# Build dependencies only. This layer is reused until the recipe changes.
+COPY --from=planner /app/recipe.json recipe.json
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    cargo chef cook --release --target "$(cat /rust-target)" --recipe-path recipe.json
 
-# create a new empty project
-RUN cargo init
+# Build the application itself.
+COPY Cargo.toml Cargo.lock* ./
+COPY src ./src
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    cargo build --release --target "$(cat /rust-target)" && \
+    cp "target/$(cat /rust-target)/release/radius-oxide" /radius-oxide
 
-COPY ./src src
-COPY Cargo.toml ./
+FROM gcr.io/distroless/static-debian12:nonroot
 
-# Translate docker platforms to rust platforms
-RUN if [ "$TARGETPLATFORM" = "linux/amd64" ]; then \
-        cargo build --release --target x86_64-unknown-linux-gnu; \
-        cp /app/target/x86_64-unknown-linux-gnu/release/radius-oxide /app/radius-oxide; \
- fi
-
-RUN if [ "$TARGETPLATFORM" = "linux/arm64" ]; then \
-        cargo build --release --target aarch64-unknown-linux-gnu; \
-        cp /app/target/aarch64-unknown-linux-gnu/release/radius-oxide /app/radius-oxide; \
- fi
-
-RUN if [ "$TARGETPLATFORM" = "linux/arm/v7" ]; then \
-        cargo build --release --target armv7-unknown-linux-gnueabi; \
-        cp /app/target/armv7-unknown-linux-gnueabi/release/radius-oxide /app/radius-oxide; \
- fi
-
-RUN if [ "$TARGETPLATFORM" = "linux/arm" ]; then \
-        cargo build --release --target arm-unknown-linux-gnueabi; \
-        cp /app/target/arm-unknown-linux-gnueabi/release/radius-oxide /app/radius-oxide; \
- fi
-
-# second stage.
-FROM gcr.io/distroless/cc-debian12 as build-release-stage
+LABEL app="radius-oxide"
+LABEL org.opencontainers.image.source="https://github.com/astr0n8t/radius-oxide"
 
 ENV RUST_LOG=info
 
-COPY --from=builder /app/radius-oxide /radius-oxide
+COPY --from=builder /radius-oxide /radius-oxide
 
 USER nonroot:nonroot
 
